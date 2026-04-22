@@ -16,6 +16,20 @@ TARGET_RMS_VALUES = {
     128.0: 9.665 * 1,
     640.0: 48.325 * 1
 }
+# 初始理论延迟 (ms)
+TARGET_EXPECTED_DELAY_MS = {
+    4.0: 2.0,
+    8.0: 3.0,
+    50.0: 10.0,
+    128.0: 4.0,  # 设置为 4ms
+}
+# 理论频率
+THEORY_FREQ = {
+    4.0: 4.01,
+    8.0: 8.05,
+    50.0: 50.5,
+    128.0: 128.05, 
+}
 Fs_ASSUMED = 1600.0
 WINDOW_SIZE = int(Fs_ASSUMED * 0.5)
 SLIDE_STEP_MS = 20.0
@@ -239,17 +253,30 @@ def process_window_accurate(S_window: np.ndarray, window_idx: int, start_sample:
         A_rms_est = np.float32(np.sqrt(a ** 2 + b ** 2)) / PRE['sqrt2']
         res[f"{int(f_nom)}Hz估算有效值(mv)"] = A_rms_est
 
-        # 2. 计算延迟 Y (相对于序号0)
+        # 2. 计算窗口中心点的相位延迟 (窗口计算延迟)
         if f_nom in DELAY_TARGET_FREQS:
             # 窗口中心的相位 phi (满足 sin(wt - phi))
             phi_center = np.float32(-np.arctan2(b, a))
-            # 补偿回序号0的绝对相位
-            phi_absolute = phi_center + PRE['two_pi'] * f_val * np.float32(t_center_absolute)
-            # 转化为毫秒延迟
-            y_ms = (phi_absolute / (PRE['two_pi'] * f_val)) * np.float32(1000.0)
+            # 转化为毫秒延迟 (窗口计算延迟)
+            window_calc_delay_ms = (phi_center / (PRE['two_pi'] * f_val)) * np.float32(1000.0)
             # 修正为正数且在一个周期内
             period_ms = np.float32(1000.0) / f_val
-            res[f"{int(f_nom)}Hz延迟Y(ms)"] = y_ms % period_ms
+            window_calc_delay_ms = window_calc_delay_ms % period_ms
+            
+            # 3. 计算窗口理论延迟
+            # 理论频率
+            theory_freq = THEORY_FREQ.get(f_nom, f_nom)
+            # 初始理论延迟
+            initial_delay_ms = TARGET_EXPECTED_DELAY_MS.get(f_nom, 0.0)
+            # 计算窗口中心点的理论相位偏移
+            window_theory_delay_ms = initial_delay_ms
+            
+            # 4. 计算误差
+            error_ms = window_calc_delay_ms - window_theory_delay_ms
+            
+            res[f"{int(f_nom)}Hz窗口计算延迟(ms)"] = window_calc_delay_ms
+            res[f"{int(f_nom)}Hz窗口理论延迟(ms)"] = window_theory_delay_ms
+            res[f"{int(f_nom)}Hz计算误差(ms)"] = error_ms
 
         res[f"{int(f_nom)}Hz监测频率(Hz)"] = f_val
         true_rms = TARGET_RMS_VALUES[f_nom]
@@ -305,7 +332,7 @@ def main():
     cols = ["窗口"]
     for f in ALL_FREQUENCIES_HZ:
         f = int(f)
-        cols.extend([f"{f}Hz估算有效值(mv)", f"{f}Hz偏差百分比(%)", f"{f}Hz延迟Y(ms)", f"{f}Hz监测频率(Hz)"])
+        cols.extend([f"{f}Hz估算有效值(mv)", f"{f}Hz偏差百分比(%)", f"{f}Hz窗口计算延迟(ms)", f"{f}Hz窗口理论延迟(ms)", f"{f}Hz计算误差(ms)", f"{f}Hz监测频率(Hz)"])
     cols.extend(["耗时(ms)", "内存占用(kb)"])
 
     df_output[[c for c in cols if c in df_output.columns]].to_excel("计算结果.xlsx", index=False)
